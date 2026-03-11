@@ -1,16 +1,17 @@
 // ==============================
 // 1️⃣ Definir o município (ROI) -> com arquivo disponível
 // ==============================
+var fc = ee.FeatureCollection("projects/doutoradouefs/assets/Morro_Chapeu");
+var nome = fc.first().get('NM_MUN').getInfo();
 
-//var ROI = ee.FeatureCollection("projects/doutoradouefs/assets/Sento_Se_mun").geometry();
-
+var ROI = fc.geometry();
 // ==============================
 // 1️⃣ Definir o município (ROI) -> sem arquivo disponível
 // ==============================
-var ROI = ee.FeatureCollection("FAO/GAUL/2015/level2") 
-               .filter(ee.Filter.eq("ADM2_NAME", "Morro Do Chapeu"));
+//var ROI = ee.FeatureCollection("FAO/GAUL/2015/level2") 
+//               .filter(ee.Filter.eq("ADM2_NAME", "Morro Do Chapeu"));
 
-var nome = ROI.first().get('ADM2_NAME').getInfo();
+//var nome = ROI.first().get('ADM2_NAME').getInfo();
 
 // Visualizar limite do município
 Map.centerObject(ROI, 9);
