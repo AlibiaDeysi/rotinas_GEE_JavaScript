@@ -1,0 +1,44 @@
+// ==============================
+// 1️⃣ Definir o município (ROI) -> com arquivo disponível
+// ==============================
+
+//var ROI = ee.FeatureCollection("projects/doutoradouefs/assets/Sento_Se_mun").geometry();
+
+// ==============================
+// 1️⃣ Definir o município (ROI) -> sem arquivo disponível
+// ==============================
+var ROI = ee.FeatureCollection("FAO/GAUL/2015/level2") 
+               .filter(ee.Filter.eq("ADM2_NAME", "Morro Do Chapeu"));
+
+var nome = ROI.first().get('ADM2_NAME').getInfo();
+
+// Visualizar limite do município
+Map.centerObject(ROI, 9);
+Map.addLayer(ROI, {color: 'red'}, 'Município: ' + nome);
+
+// ==============================
+// 2️⃣ Carregar o MDE (SRTM)
+// ==============================
+var mde = ee.Image("USGS/SRTMGL1_003");
+
+// Recortar o MDE para o município
+var mde_clip = mde.clip(ROI);
+
+// Visualizar o MDE
+Map.addLayer(mde_clip, 
+             {min: 200, max: 800, palette: ['blue', 'green', 'yellow', 'orange', 'brown']}, 
+             'MDE - Canudos');
+
+// ==============================
+// 3️⃣ Exportar o MDE
+// ==============================
+Export.image.toDrive({
+  image: mde_clip,
+  description: 'MDE_' + nome +'_SRTM30m',
+  folder: 'GEE_MDE',
+  //fileNamePrefix: 'MDE_Sento-Se_SRTM30m',
+  region: ROI,
+  scale: 30,       // resolução de 30 metros
+  crs: 'EPSG:4326', // sistema de referência geográfica
+  maxPixels: 1e13
+});
