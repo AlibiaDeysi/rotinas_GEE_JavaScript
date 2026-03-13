@@ -1,1 +1,73 @@
+// ==============================
+// MÉDIA ANUAL DE PRECIPITAÇÃO DOS DADOS CHIRPS
+// ADICIONADO A REAMOSTRAGEM DE PIXEL PARA 30M 
+// ==============================
 
+// ==============================
+// 1️⃣ Definir o município (ROI) -> com arquivo disponível
+// ==============================
+var fc = ee.FeatureCollection("projects/doutoradouefs/assets/Morro_Chapeu");
+var nome = fc.first().get('NM_MUN').getInfo();
+
+var ROI = fc.geometry();
+// ==============================
+// 1️⃣ Definir o município (ROI) -> sem arquivo disponível
+// ==============================
+//var ROI = ee.FeatureCollection("FAO/GAUL/2015/level2") 
+//               .filter(ee.Filter.eq("ADM2_NAME", "Morro Do Chapeu"));
+
+//var nome = ROI.first().get('ADM2_NAME').getInfo();
+
+// Visualizar limite do município
+Map.centerObject(ROI, 9);
+Map.addLayer(ROI, {color: 'red'}, 'Município: ' + nome);
+
+
+// CHIRPS
+var chirps = ee.ImageCollection("UCSB-CHG/CHIRPS/DAILY")
+              .filterDate('1985-01-01','2025-12-31')
+              .filterBounds(ROI);
+
+// Lista de anos
+var anos = ee.List.sequence(1985,2025);
+
+// Precipitação anual
+var anual = ee.ImageCollection(
+  anos.map(function(ano){
+
+    var inicio = ee.Date.fromYMD(ano,1,1);
+    var fim = inicio.advance(1,'year');
+
+    return chirps
+      .filterDate(inicio,fim)
+      .sum()
+      .set('year',ano);
+
+  })
+);
+
+// Média anual
+var media = anual.mean().clip(ROI);
+
+// Reamostragem
+var media30m = media
+                .resample('bilinear')
+                .reproject({
+                  crs: 'EPSG:4326',
+                  scale: 30
+                });
+
+// Visualizar
+Map.addLayer(media30m,
+            {min:500, max:1500, palette:['white','blue','darkblue']},
+            'Media anual 30m');
+
+// Exportação
+Export.image.toDrive({
+  image: media30m,
+  description: 'precipitacao_media_1985_2024_30m_'+nome,
+  folder: 'CHIRPS',
+  region: ROI,
+  scale: 30,
+  maxPixels: 1e13
+});
