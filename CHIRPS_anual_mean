@@ -1,60 +1,336 @@
-// ==============================
-// MÉDIA ANUAL DE PRECIPITAÇÃO DOS DADOS CHIRPS
-// COM REAMOSTRAGEM DE PIXEL PARA 30M 
-// ==============================
+// =============================================================================
+// MÉDIA ANUAL DE PRECIPITAÇÃO CHIRPS POR PIXEL
+// faz a reamostragem
+// =============================================================================
 
-// 1️⃣ Definir o município (ROI)
-var fc = ee.FeatureCollection("projects/doutoradouefs/assets/Morro_Chapeu");
-var nome = fc.first().get('NM_MUN').getInfo();
-var ROI = fc.geometry();
 
-Map.centerObject(ROI, 9);
-Map.addLayer(ROI, {color: 'red'}, 'Município: ' + nome);
+// ─────────────────────────────────────────────────────────────────────────────
+// 1. PARÂMETROS
+// ─────────────────────────────────────────────────────────────────────────────
 
-// CHIRPS
-var chirps = ee.ImageCollection("UCSB-CHG/CHIRPS/DAILY")
-              .filterDate('1985-01-01','2024-12-31')
-              .filterBounds(ROI);
+var COD_IBGE = '2921708';
 
-// Lista de anos
-var anos = ee.List.sequence(1985, 2024);
+var ASSET_MUNICIPIOS = 'projects/doutoradouefs/assets/BR_Municipios_2024';
 
-// Precipitação anual
-var anual = ee.ImageCollection(
-  anos.map(function(ano){
-    var inicio = ee.Date.fromYMD(ano, 1, 1);
-    var fim = inicio.advance(1, 'year');
+var ANO_INICIO = 1981;
+var ANO_FIM    = 2024;
+
+// ── Opções de export ──────────────────────────────────────────────────────────
+var EXPORTAR_NATIVO     = true;   // resolução nativa CHIRPS (~5,5 km)
+var EXPORTAR_REAMOSTRADO = true;  // GeoTIFF reamostrado para ESCALA_RESAMP metros
+
+// ── Reamostragem ──────────────────────────────────────────────────────────────
+var ESCALA_RESAMP  = 30;          
+var METODO_RESAMP  = 'bilinear';  // 'bilinear' (suave) ou 'bicubic' (mais nítido)
+
+// ── CRS ───────────────────────────────────────────────────────────────────────
+// null = zona UTM SIRGAS 2000 calculada automaticamente pelo centroide
+// Para forçar: 'EPSG:31984'
+var CRS_SAIDA = null;
+
+// ── Outros ───────────────────────────────────────────────────────────────────
+var PASTA_DRIVE = 'GEE_CHIRPS';
+var ESCALA_CSV  = ESCALA_RESAMP;  // escala do CSV de pixels (aumente se ficar grande)
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 2. FUNÇÃO: SANITIZA STRING PARA NOME DE ARQUIVO
+// ─────────────────────────────────────────────────────────────────────────────
+
+function sanitizarNome(str) {
+  return str
+    .toLowerCase()
+    .replace(/[áàâãä]/g, 'a')
+    .replace(/[éèêë]/g,  'e')
+    .replace(/[íìîï]/g,  'i')
+    .replace(/[óòôõö]/g, 'o')
+    .replace(/[úùûü]/g,  'u')
+    .replace(/ç/g,       'c')
+    .replace(/ñ/g,       'n')
+    .replace(/[\s\-]+/g, '_')
+    .replace(/[^a-z0-9_]/g, '')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '')
+    .substring(0, 50);
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 3. CARREGA O MUNICÍPIO PELO CÓDIGO IBGE (CD_MUN)
+// ─────────────────────────────────────────────────────────────────────────────
+
+var municipios = ee.FeatureCollection(ASSET_MUNICIPIOS);
+
+var featureMunicipio = municipios
+  .filter(ee.Filter.eq('CD_MUN', COD_IBGE))
+  .first();
+
+var roi = featureMunicipio.geometry();
+
+print('─── Município identificado ───');
+print('CD_MUN:',   featureMunicipio.get('CD_MUN'));
+print('NM_MUN:',   featureMunicipio.get('NM_MUN'));
+print('SIGLA_UF:', featureMunicipio.get('SIGLA_UF'));
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 4. PROCESSAMENTO RASTER
+// ─────────────────────────────────────────────────────────────────────────────
+
+// 4a. CHIRPS filtrado pela área e período
+var chirps = ee.ImageCollection('UCSB-CHG/CHIRPS/DAILY')
+  .filterBounds(roi)
+  .filterDate(
+    ee.Date.fromYMD(ANO_INICIO, 1,  1),
+    ee.Date.fromYMD(ANO_FIM,    12, 31)
+  )
+  .select('precipitation');
+
+print('Total de imagens CHIRPS no período:', chirps.size());
+
+// 4b. Total anual por pixel → média interanual
+var anos = ee.List.sequence(ANO_INICIO, ANO_FIM);
+
+var colecaoAnual = ee.ImageCollection.fromImages(
+  anos.map(function(ano) {
+    ano = ee.Number(ano);
+    var inicio = ee.Date.fromYMD(ano, 1,  1);
+    var fim    = ee.Date.fromYMD(ano, 12, 31);
     return chirps
       .filterDate(inicio, fim)
       .sum()
-      .set('year', ano);
+      .set('year',              ano)
+      .set('system:time_start', inicio.millis());
   })
 );
 
-// Média anual
-var media = anual.mean().clip(ROI);
+// Média interanual na resolução nativa CHIRPS
+var mediaAnualNativa = colecaoAnual.mean()
+  .clip(roi)
+  .rename('precip_media_anual_mm');
 
-// Reamostragem para 30m em SIRGAS 2000 UTM
-var media30m = media
-                .resample('bilinear')
-                .reproject({
-                  crs: 'EPSG:31984',  // SIRGAS 2000 UTM Zone 24S (ajuste conforme sua área!!!)
-                  scale: 30
-                });
+print('Imagens anuais geradas:', colecaoAnual.size());
 
-// Visualizar
-Map.addLayer(media30m,
-            {min: 500, max: 1500, palette: ['white', 'blue', 'darkblue']},
-            'Media anual 30m');
+// 4c. CRS: calcula a zona UTM SIRGAS 2000 pela longitude do centroide (server-side)
+//     O valor resolvido (string client-side) virá via evaluate no bloco 5.
+//     Se o usuário forçou um CRS manualmente, empacota como ee.String para
+//     o evaluate conseguir ler da mesma forma.
+var CRS_SERVER = (CRS_SAIDA === null)
+  ? (function() {
+      var lon = ee.Number(roi.centroid(100).coordinates().get(0));
+      return ee.Algorithms.If(lon.lt(-66), 'EPSG:31979',
+             ee.Algorithms.If(lon.lt(-60), 'EPSG:31980',
+             ee.Algorithms.If(lon.lt(-54), 'EPSG:31981',
+             ee.Algorithms.If(lon.lt(-48), 'EPSG:31982',
+             ee.Algorithms.If(lon.lt(-42), 'EPSG:31983',
+             ee.Algorithms.If(lon.lt(-36), 'EPSG:31984',
+                                           'EPSG:31985'))))))
+    })()
+  : ee.String(CRS_SAIDA);
 
-// ✅ EXPORTAÇÃO CORRIGIDA
-Export.image.toDrive({
-  image: media30m,                             
-  description: 'precipitacao_media_1985_2024_' + nome,
-  folder: 'CHIRPS',
-  region: ROI,
-  scale: 30,                                    
-  crs: 'EPSG:31984',                            
-  fileFormat: 'GeoTIFF',
-  maxPixels: 1e13
+// Visualização da camada nativa já pode ser adicionada agora (não depende do CRS)
+var paleta   = ['f7fbff','deebf7','c6dbef','9ecae1',
+                '6baed6','4292c6','2171b5','08519c','08306b'];
+var visParams = {min: 400, max: 1200, palette: paleta};
+
+Map.centerObject(roi, 10);
+
+if (EXPORTAR_NATIVO) {
+  Map.addLayer(mediaAnualNativa, visParams,
+    'Nativa ~5,5 km | ' + ANO_INICIO + '–' + ANO_FIM);
+}
+Map.addLayer(
+  ee.FeatureCollection([featureMunicipio]),
+  {color: 'red', fillColor: '00000000'},
+  'Limite municipal (CD_MUN: ' + COD_IBGE + ')'
+);
+print('Paleta: azul claro (400 mm/ano) → azul escuro (1200 mm/ano)');
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 5. EVALUATE — resolve NM_MUN, SIGLA_UF e CRS em um único round-trip.
+//    Toda a reamostragem, estatísticas e exports são disparados aqui dentro,
+//    garantindo que CRS seja uma string JS pura (não um ComputedObject),
+//    o que é obrigatório para Export.image.toDrive funcionar corretamente.
+// ─────────────────────────────────────────────────────────────────────────────
+
+ee.List([
+  featureMunicipio.get('NM_MUN'),
+  featureMunicipio.get('SIGLA_UF'),
+  CRS_SERVER                          // ← CRS resolvido aqui, client-side
+]).evaluate(function(valores, erro) {
+
+  if (erro) {
+    print('❌ Erro ao resolver atributos:', erro);
+    print('Verifique se CD_MUN "' + COD_IBGE + '" existe no asset:', ASSET_MUNICIPIOS);
+    return;
+  }
+
+  var nmMun   = valores[0];   // ex: "Morro do Chapéu"
+  var siglaUF = valores[1];   // ex: "BA"
+  var crs     = valores[2];   // ex: "EPSG:31984"  ← string pura, segura para export
+
+  print('CRS resolvido: ' + (CRS_SAIDA === null ? '(automático) ' : '(manual) ') + crs);
+
+  // ── Reamostragem — só agora, com crs como string client-side ─────────────
+  var mediaAnual30m = null;
+
+  if (EXPORTAR_REAMOSTRADO) {
+    mediaAnual30m = mediaAnualNativa
+      .resample(METODO_RESAMP)
+      .reproject({ crs: crs, scale: ESCALA_RESAMP });
+
+    print('✅ Reamostragem: ' + METODO_RESAMP + ' → ' + ESCALA_RESAMP + ' m | ' + crs);
+
+    Map.addLayer(mediaAnual30m, visParams,
+      'Reamostrada ' + ESCALA_RESAMP + ' m (' + METODO_RESAMP + ') | ' + ANO_INICIO + '–' + ANO_FIM);
+  }
+
+  // ── Estatísticas ─────────────────────────────────────────────────────────
+  var imagemStats = EXPORTAR_REAMOSTRADO ? mediaAnual30m : mediaAnualNativa;
+  var escalaStats = EXPORTAR_REAMOSTRADO ? ESCALA_RESAMP : 5566;
+  var crsStats    = EXPORTAR_REAMOSTRADO ? crs : 'EPSG:4326';
+
+  var stats = imagemStats.reduceRegion({
+    reducer: ee.Reducer.mean()
+      .combine(ee.Reducer.min(),    null, true)
+      .combine(ee.Reducer.max(),    null, true)
+      .combine(ee.Reducer.stdDev(), null, true),
+    geometry:  roi,
+    scale:     escalaStats,
+    crs:       crsStats,
+    maxPixels: 1e13
+  });
+  print('─── Estatísticas da Média Anual (mm/ano) ───', stats);
+
+  // ── Nomes de arquivo ─────────────────────────────────────────────────────
+  var nomeLimpo = sanitizarNome(nmMun);
+  var PREFIXO   = 'chirps_' + nomeLimpo + '_' + siglaUF;
+
+  print('─── Nomes de arquivo (gerados automaticamente) ───');
+  print('NM_MUN original  :', nmMun);
+  print('Nome sanitizado  :', nomeLimpo);
+  print('Prefixo de saída :', PREFIXO);
+
+  // ── Export A: GeoTIFF NATIVO (~5,5 km, EPSG:4326) ────────────────────────
+  if (EXPORTAR_NATIVO) {
+    var descNativo = PREFIXO + '_media_anual_nativo_5566m_'
+                   + ANO_INICIO + '_' + ANO_FIM;
+
+    Export.image.toDrive({
+      image:          mediaAnualNativa,
+      description:    descNativo,
+      folder:         PASTA_DRIVE,
+      fileNamePrefix: descNativo,
+      region:         roi,
+      scale:          5566,
+      crs:            'EPSG:4326',
+      maxPixels:      1e13,
+      fileFormat:     'GeoTIFF'
+    });
+    print('✅ Export nativo    :', descNativo + '.tif  (~5566 m | EPSG:4326)');
+  }
+
+  // ── Export B: GeoTIFF REAMOSTRADO ────────────────────────────────────────
+  if (EXPORTAR_REAMOSTRADO) {
+    var descResamp = PREFIXO + '_media_anual_' + METODO_RESAMP + '_'
+                   + ESCALA_RESAMP + 'm_' + ANO_INICIO + '_' + ANO_FIM;
+
+    Export.image.toDrive({
+      image:          mediaAnual30m,
+      description:    descResamp,
+      folder:         PASTA_DRIVE,
+      fileNamePrefix: descResamp,
+      region:         roi,
+      scale:          ESCALA_RESAMP,
+      crs:            crs,            // ← string client-side resolvida
+      maxPixels:      1e13,
+      fileFormat:     'GeoTIFF'
+    });
+    print('✅ Export reamostrado:', descResamp + '.tif  (' + ESCALA_RESAMP + ' m | ' + crs + ')');
+
+    // ── Export C: CSV de pixels ───────────────────────────────────────────
+    var imagemComLatLon = mediaAnual30m.addBands(ee.Image.pixelLonLat());
+
+    var pixelsComoFeatures = imagemComLatLon.sample({
+      region:     roi,
+      scale:      ESCALA_CSV,
+      projection: crs,                // ← string client-side resolvida
+      geometries: true
+    });
+
+    var descPixels = PREFIXO + '_pixels_' + ESCALA_CSV + 'm_'
+                   + ANO_INICIO + '_' + ANO_FIM;
+
+    Export.table.toDrive({
+      collection:     pixelsComoFeatures,
+      description:    descPixels,
+      folder:         PASTA_DRIVE,
+      fileNamePrefix: descPixels,
+      fileFormat:     'CSV'
+    });
+    print('✅ Export CSV pixels:', descPixels + '.csv  (' + ESCALA_CSV + ' m | ' + crs + ')');
+  }
+
+  // ── Export D: Série histórica anual (média espacial) ─────────────────────
+  var serieAnual = colecaoAnual.map(function(img) {
+    var media = img.reduceRegion({
+      reducer:   ee.Reducer.mean(),
+      geometry:  roi,
+      scale:     5566,
+      maxPixels: 1e9
+    });
+    return ee.Feature(null, {
+      'municipio':       nmMun,
+      'uf':              siglaUF,
+      'cd_mun':          COD_IBGE,
+      'ano':             img.get('year'),
+      'precip_total_mm': media.get('precipitation')
+    });
+  });
+
+  var fcSerie = ee.FeatureCollection(serieAnual);
+
+  var grafico = ui.Chart.feature.byFeature({
+    features:    fcSerie,
+    xProperty:   'ano',
+    yProperties: ['precip_total_mm']
+  })
+  .setChartType('LineChart')
+  .setOptions({
+    title:     'Precipitação Total Anual — ' + nmMun + ' / ' + siglaUF
+              + ' (' + ANO_INICIO + '–' + ANO_FIM + ')',
+    hAxis:     {title: 'Ano'},
+    vAxis:     {title: 'Precipitação (mm/ano)'},
+    legend:    {position: 'none'},
+    colors:    ['#2171b5'],
+    lineWidth: 2,
+    pointSize: 4
+  });
+
+  print('─── Série Histórica: ' + nmMun + ' / ' + siglaUF + ' ───');
+  print(grafico);
+
+  var descSerie = PREFIXO + '_serie_anual_' + ANO_INICIO + '_' + ANO_FIM;
+
+  Export.table.toDrive({
+    collection:     fcSerie,
+    description:    descSerie,
+    folder:         PASTA_DRIVE,
+    fileNamePrefix: descSerie,
+    fileFormat:     'CSV'
+  });
+  print('✅ Export série     :', descSerie + '.csv');
+
+  // ── Resumo final ──────────────────────────────────────────────────────────
+  print('════════════════════════════════════════════════');
+  print('📌 Município : ' + nmMun + ' / ' + siglaUF + ' (CD_MUN: ' + COD_IBGE + ')');
+  print('📅 Período   : ' + ANO_INICIO + ' – ' + ANO_FIM);
+  print('📦 Nativo    : ' + (EXPORTAR_NATIVO      ? '✅ ~5566 m | EPSG:4326'                              : '—'));
+  print('📐 Resamp.   : ' + (EXPORTAR_REAMOSTRADO ? '✅ ' + ESCALA_RESAMP + ' m | ' + METODO_RESAMP + ' | ' + crs : '—'));
+  print('📁 Drive     : ' + PASTA_DRIVE);
+  print('🔑 Prefixo   : ' + PREFIXO);
+  print('════════════════════════════════════════════════');
+  
+
 });
