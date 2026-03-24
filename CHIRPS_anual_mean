@@ -3,25 +3,23 @@
 // faz a reamostragem
 // =============================================================================
 
-
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. PARÂMETROS
 // ─────────────────────────────────────────────────────────────────────────────
 
 var COD_IBGE = '2921708';
-
 var ASSET_MUNICIPIOS = 'projects/doutoradouefs/assets/BR_Municipios_2024';
 
 var ANO_INICIO = 1981;
 var ANO_FIM    = 2024;
 
 // ── Opções de export ──────────────────────────────────────────────────────────
-var EXPORTAR_NATIVO     = true;   // resolução nativa CHIRPS (~5,5 km)
+var EXPORTAR_NATIVO = true;   // resolução nativa CHIRPS (~5,5 km)
 var EXPORTAR_REAMOSTRADO = true;  // GeoTIFF reamostrado para ESCALA_RESAMP metros
 
 // ── Reamostragem ──────────────────────────────────────────────────────────────
-var ESCALA_RESAMP  = 30;          
-var METODO_RESAMP  = 'bilinear';  // 'bilinear' (suave) ou 'bicubic' (mais nítido)
+var ESCALA_RESAMP = 30;          
+var METODO_RESAMP = 'bilinear';  // 'bilinear' (suave) ou 'bicubic' (mais nítido)
 
 // ── CRS ───────────────────────────────────────────────────────────────────────
 // null = zona UTM SIRGAS 2000 calculada automaticamente pelo centroide
@@ -31,7 +29,6 @@ var CRS_SAIDA = null;
 // ── Outros ───────────────────────────────────────────────────────────────────
 var PASTA_DRIVE = 'GEE_CHIRPS';
 var ESCALA_CSV  = ESCALA_RESAMP;  // escala do CSV de pixels (aumente se ficar grande)
-
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 2. FUNÇÃO: SANITIZA STRING PARA NOME DE ARQUIVO
@@ -54,7 +51,6 @@ function sanitizarNome(str) {
     .substring(0, 50);
 }
 
-
 // ─────────────────────────────────────────────────────────────────────────────
 // 3. CARREGA O MUNICÍPIO PELO CÓDIGO IBGE (CD_MUN)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -72,17 +68,16 @@ print('CD_MUN:',   featureMunicipio.get('CD_MUN'));
 print('NM_MUN:',   featureMunicipio.get('NM_MUN'));
 print('SIGLA_UF:', featureMunicipio.get('SIGLA_UF'));
 
-
 // ─────────────────────────────────────────────────────────────────────────────
-// 4. PROCESSAMENTO RASTER
+// 4. PROCESSAMENTO CHIRPS
 // ─────────────────────────────────────────────────────────────────────────────
 
 // 4a. CHIRPS filtrado pela área e período
 var chirps = ee.ImageCollection('UCSB-CHG/CHIRPS/DAILY')
   .filterBounds(roi)
   .filterDate(
-    ee.Date.fromYMD(ANO_INICIO, 1,  1),
-    ee.Date.fromYMD(ANO_FIM,    12, 31)
+    ee.Date.fromYMD(ANO_INICIO, 1, 1),
+    ee.Date.fromYMD(ANO_FIM, 12, 31)
   )
   .select('precipitation');
 
@@ -99,7 +94,7 @@ var colecaoAnual = ee.ImageCollection.fromImages(
     return chirps
       .filterDate(inicio, fim)
       .sum()
-      .set('year',              ano)
+      .set('year', ano)
       .set('system:time_start', inicio.millis());
   })
 );
@@ -111,10 +106,7 @@ var mediaAnualNativa = colecaoAnual.mean()
 
 print('Imagens anuais geradas:', colecaoAnual.size());
 
-// 4c. CRS: calcula a zona UTM SIRGAS 2000 pela longitude do centroide (server-side)
-//     O valor resolvido (string client-side) virá via evaluate no bloco 5.
-//     Se o usuário forçou um CRS manualmente, empacota como ee.String para
-//     o evaluate conseguir ler da mesma forma.
+// 4c. CRS: calcula a zona UTM SIRGAS 2000 pela longitude do centroide
 var CRS_SERVER = (CRS_SAIDA === null)
   ? (function() {
       var lon = ee.Number(roi.centroid(100).coordinates().get(0));
@@ -144,20 +136,17 @@ Map.addLayer(
   {color: 'red', fillColor: '00000000'},
   'Limite municipal (CD_MUN: ' + COD_IBGE + ')'
 );
-print('Paleta: azul claro (400 mm/ano) → azul escuro (1200 mm/ano)');
+//print('Paleta: azul claro (400 mm/ano) → azul escuro (1200 mm/ano)');
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 5. EVALUATE — resolve NM_MUN, SIGLA_UF e CRS em um único round-trip.
-//    Toda a reamostragem, estatísticas e exports são disparados aqui dentro,
-//    garantindo que CRS seja uma string JS pura (não um ComputedObject),
-//    o que é obrigatório para Export.image.toDrive funcionar corretamente.
+// 5. EVALUATE
 // ─────────────────────────────────────────────────────────────────────────────
 
 ee.List([
   featureMunicipio.get('NM_MUN'),
   featureMunicipio.get('SIGLA_UF'),
-  CRS_SERVER                          // ← CRS resolvido aqui, client-side
+  CRS_SERVER
 ]).evaluate(function(valores, erro) {
 
   if (erro) {
@@ -243,7 +232,7 @@ ee.List([
       fileNamePrefix: descResamp,
       region:         roi,
       scale:          ESCALA_RESAMP,
-      crs:            crs,            // ← string client-side resolvida
+      crs:            crs,            
       maxPixels:      1e13,
       fileFormat:     'GeoTIFF'
     });
@@ -255,7 +244,7 @@ ee.List([
     var pixelsComoFeatures = imagemComLatLon.sample({
       region:     roi,
       scale:      ESCALA_CSV,
-      projection: crs,                // ← string client-side resolvida
+      projection: crs,                
       geometries: true
     });
 
